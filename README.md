@@ -1,8 +1,7 @@
 # online-mahalla auto-filler
 
-Selenium (Microsoft Edge) automation for the [online-mahalla.uz](https://www.online-mahalla.uz)
-workspace. The project fills household records and populates the
-"Хонадон аъзолари" tab with up to 30 entries whose relationship is "Бошқа".
+Selenium (Microsoft Edge) automation for the [online-mahalla.uz](https://www.online-mahalla.uz) workspace. 
+The project fills household records and populates the "Хонадон аъзолари" tab with family members and their relationships.
 
 Two independent runners share one persistent browser profile, so manual login is
 required only once.
