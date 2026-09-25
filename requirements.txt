@@ -1,0 +1,3 @@
+# Зависимости online-mahalla auto-filler
+selenium>=4.20
+openpyxl>=3.1

@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+
+# Browser profiles and driver cache
+browsers/
+drivers/
+*.crx
+
+# Runtime state, reports, logs, screenshots
+var/
+legacy/
+
+# Input tables and source data
+*.xlsx
+*.xls
+*.csv
+data/input/*
+data/streets/*
+data/streets/*.txt
+!data/input/.gitkeep
+!data/streets/.gitkeep
+
+# Secrets
+masterkey.txt
+*.key
+*.pem
+.env
+.env.*
+docs/legacy/masterkey.txt
+docs/legacy/*.xlsx
+
+# IDE and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
