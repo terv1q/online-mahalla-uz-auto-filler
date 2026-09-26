@@ -20,6 +20,13 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 STREET_LINK_RE = re.compile(
     r'<a[^>]+href="([^"]*survey_homes_street[^"]*)"[^>]*>(.*?)</a>', re.S)
 
+DOC_HOMOGLYPHS = str.maketrans({
+    "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M",
+    "Н": "H", "О": "O", "Р": "P", "С": "C", "Т": "T", "Х": "X",
+    "а": "A", "в": "B", "е": "E", "к": "K", "м": "M",
+    "н": "H", "о": "O", "р": "P", "с": "C", "т": "T", "х": "X",
+})
+
 
 def normalize_code(value: str) -> str:
     if not value:
@@ -119,6 +126,15 @@ def norm_text(text: str) -> str:
 
 def digits_only(text: str) -> str:
     return "".join(c for c in (text or "") if c.isdigit())
+
+
+def norm_doc_code(value: str) -> str:
+    """
+    Серия и номер документа без учёта регистра, разделителей и похожих букв.
+    Маска сайта переводит кириллицу в латиницу: «КР-Х» приходит как «KP-Х».
+    """
+    text = str(value or "").upper().translate(DOC_HOMOGLYPHS)
+    return "".join(char for char in text if char.isalnum())
 
 
 def birth_from_pinfl(pinfl: str) -> Optional[str]:
