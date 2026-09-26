@@ -68,6 +68,9 @@ CADASTER_TIMEOUT = 900
 MEMBER_FAIL_LIMIT = 3
 
 
+MODAL_CRITICAL_PROBLEMS = ("қариндошлиги", "ҳужжат тури", "ҳужжат серияси")
+
+
 ROW_SKIP_PREFIX = "СТРОКА_ИСПОЛЬЗОВАНА: "
 
 
