@@ -35,6 +35,7 @@ from ..core.timing import (
 )
 from ..core.utils import (
     digits_only,
+    norm_doc_code,
     norm_text,
     parse_streets_file,
     url_params,
@@ -57,6 +58,7 @@ from .config import (
     MEMBER_BIRTH_NAMES,
     MEMBER_FAIL_LIMIT,
     MEMBER_FILL_ATTEMPTS,
+    MODAL_CRITICAL_PROBLEMS,
     PROFILE,
     MEMBER_PAUSE,
     PHONE_NAMES,
@@ -375,8 +377,9 @@ class FamilyAutomation:
                     if self.automator._fill_input(field_input, variant, read_back=read_back):
                         time.sleep(AFTER_FIELD_PAUSE)
                         current = read_back()
-                        if norm_text(current) == norm_text(variant) or self._same_digits(
-                                current, variant):
+                        if (norm_text(current) == norm_text(variant)
+                                or self._same_digits(current, variant)
+                                or norm_doc_code(current) == norm_doc_code(variant)):
                             marker = "" if variant == value else " (без маски)"
                             actions.info(f"МОДАЛКА {names[0]} = {current}{marker}")
                             return True
@@ -490,7 +493,7 @@ class FamilyAutomation:
             time.sleep(AFTER_ERROR_PAUSE)
 
         self.automator._close_dropdown()
-        self._log_field_html(name)
+        self.automator._log_field_html(name)
         logger.warning(f"МОДАЛКА {name}: «{value}» не выбрано. Варианты: "
                        f"{brief(self.automator._option_texts())}")
         return False
@@ -571,6 +574,8 @@ class FamilyAutomation:
             return False
         if current == target or current.startswith(target) or target.startswith(current):
             return True
+        if current and norm_doc_code(current) == norm_doc_code(target):
+            return True
         logger.warning(f"МОДАЛКА {label or names[0]}: ожидалось «{expected}», "
                        f"в поле «{state.get('rendered')}»")
         return False
@@ -645,6 +650,52 @@ class FamilyAutomation:
         return False
 
 
+    def _fill_member_fields(self, row: ExcelRow) -> List[str]:
+        """
+        Заполнить поля открытой модалки. Возвращает список того, что не встало:
+        по нему вызывающий код решает, переоткрывать форму или идти дальше.
+        """
+        problems: List[str] = []
+        if not self._modal_select(RELATION_NAMES, RELATION_VALUE, ("қариндош",)):
+            problems.append("қариндошлиги")
+
+        doc_ok = False
+        for needle in row.doc_type_needles():
+            if self._modal_select(DOC_TYPE_NAMES, needle,
+                                  ("ҳужжат тури", "документ тури")):
+                doc_ok = True
+                break
+        if not doc_ok:
+            problems.append("ҳужжат тури")
+
+        if not self._modal_fill(DOC_SERIES_NAMES, row.doc_series,
+                                ("серия", "серияси")):
+            problems.append("ҳужжат серияси")
+        if not self._modal_fill(DOC_NUMBER_NAMES, row.doc_number,
+                                ("рақам", "рақами")):
+            problems.append("ҳужжат рақами")
+        if not self._modal_fill(MEMBER_BIRTH_NAMES, row.birth_date(),
+                                ("туғилган", "тугилган")):
+            problems.append("туғилган санаси")
+
+        pinfl = row.pinfl_digits()
+        if pinfl and not self._modal_fill(PINFL_NAMES, pinfl,
+                                          ("жшшир", "пинфл", "jshshir")):
+            problems.append("жшшир")
+        return problems
+
+    def _reopen_modal(self) -> bool:
+        """Закрыть модалку и открыть заново: чистая форма без зависших списков."""
+        self.close_member_modal()
+        time.sleep(AFTER_MODAL_CLOSE)
+        clicked = self.automator.js(JS_CLICK_MEMBER_SAVE)
+        if str(clicked) == "not-found":
+            return False
+        if self.modal(timeout=FORM_READY_TIMEOUT) is None:
+            return False
+        self.automator.wait_page_settled(timeout=self._scale(FORM_READY_TIMEOUT))
+        return self.modal(timeout=FORM_READY_TIMEOUT) is not None
+
     def add_member(self, row: ExcelRow) -> Tuple[bool, str]:
         automator = self.automator
         before = self.members_count()
@@ -658,6 +709,10 @@ class FamilyAutomation:
 
         modal = self.modal(timeout=FORM_READY_TIMEOUT)
         if modal is None:
+            actions.info("МОДАЛКА: повторное нажатие «Сақлаш» на вкладке")
+            automator.js(JS_CLICK_MEMBER_SAVE)
+            modal = self.modal(timeout=FORM_READY_TIMEOUT)
+        if modal is None:
             automator._screenshot("member_modal_fail")
             return False, "модалка «Оила аъзосини киритиш» не открылась"
         automator.wait_page_settled(timeout=self._scale(FORM_READY_TIMEOUT))
@@ -665,33 +720,11 @@ class FamilyAutomation:
         fields = automator.js(JS_MODAL_FIELDS) or []
         actions.info(f"МОДАЛКА поля: {brief([f.get('name') for f in fields])}")
 
-        problems: List[str] = []
-        if not self._modal_select(RELATION_NAMES, RELATION_VALUE, ("қариндош",)):
-            problems.append("қариндошлиги")
-
-        doc_ok = False
-        for needle in row.doc_type_needles():
-            if self._modal_select(DOC_TYPE_NAMES, needle,
-                                  ("ҳужжат тури", "документ тури")):
-                doc_ok = True
-                break
-        if not doc_ok:
-            problems.append(f"ҳужжат тури ({row.doc_type or '—'})")
-
-        if not self._modal_fill(DOC_SERIES_NAMES, row.doc_series,
-                                ("серия", "серияси")):
-            problems.append("ҳужжат серияси")
-        if not self._modal_fill(DOC_NUMBER_NAMES, row.doc_number,
-                                ("рақам", "рақами")):
-            problems.append("ҳужжат рақами")
-        birth = row.birth_date()
-        if not self._modal_fill(MEMBER_BIRTH_NAMES, birth, ("туғилган", "тугилган")):
-            problems.append("туғилган санаси")
-
-        pinfl = row.pinfl_digits()
-        if pinfl and not self._modal_fill(PINFL_NAMES, pinfl,
-                                          ("жшшир", "пинфл", "jshshir")):
-            problems.append("жшшир")
+        problems = self._fill_member_fields(row)
+        if [p for p in problems if p in MODAL_CRITICAL_PROBLEMS]:
+            actions.info(f"МОДАЛКА: повторное заполнение после — {brief(problems)}")
+            if self._reopen_modal():
+                problems = self._fill_member_fields(row)
         if problems:
             actions.info(f"МОДАЛКА: не заполнено — {brief(problems)}")
             logger.warning("Модалка: не заполнено — " + "; ".join(problems))
