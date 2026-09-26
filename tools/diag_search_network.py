@@ -2,7 +2,7 @@ import logging
 import pathlib
 import sys
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import argparse
 import json
@@ -14,7 +14,7 @@ def out(*parts) -> None:
 
 
 def silence_console_logging() -> None:
-    log = logging.getLogger("family")
+    log = logging.getLogger("mahalla")
     for handler in list(log.handlers):
         if isinstance(handler, logging.FileHandler):
             continue
@@ -28,7 +28,7 @@ def out_json(label, data, limit=3000):
     out(f"{label}\n{text}")
 
 
-import family_filler as fam
+import src.family_filler as fam
 
 
 silence_console_logging()

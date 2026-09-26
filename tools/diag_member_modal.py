@@ -5,9 +5,9 @@ import pathlib
 import sys
 import time
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-import family_filler as fam
+import src.family_filler as fam
 
 DUMP_OVERLAYS = """
 const rows = [];
@@ -56,7 +56,7 @@ def out(*parts) -> None:
 
 
 def silence_console_logging() -> None:
-    log = logging.getLogger("family")
+    log = logging.getLogger("mahalla")
     for handler in list(log.handlers):
         if isinstance(handler, logging.FileHandler):
             continue
