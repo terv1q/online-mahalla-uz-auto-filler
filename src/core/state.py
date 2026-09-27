@@ -138,6 +138,44 @@ class CadasterRegistry:
         return sum(1 for code in codes if self.add(code, source, street))
 
 
+class StreetMap:
+    """
+    Соответствие «улица в таблице → улица на сайте» с диска. Ключ — street_key
+    названия из таблицы, значение — {'url','name','street_id'}. Пока все улицы
+    таблицы есть в файле, страница со списком улиц не открывается вовсе.
+    """
+
+    def __init__(self, path: str):
+        self.path = Path(path)
+        self.data: Dict[str, dict] = {}
+        if self.path.exists():
+            try:
+                self.data = json.loads(self.path.read_text(encoding="utf-8"))
+                if not isinstance(self.data, dict):
+                    self.data = {}
+            except Exception as exc:
+                logger.warning(f"Карта улиц повреждена ({exc}) — соберу заново")
+                self.data = {}
+        logger.info(f"Карта улиц: сопоставлено ранее {len(self.data)}")
+
+    def get(self, key: str) -> Optional[dict]:
+        unit = self.data.get(key)
+        return unit if isinstance(unit, dict) and unit.get("url") else None
+
+    def put(self, key: str, unit: dict) -> None:
+        if not key or not unit.get("url"):
+            return
+        self.data[key] = unit
+        self._flush()
+
+    def _flush(self) -> None:
+        try:
+            self.path.write_text(json.dumps(self.data, ensure_ascii=False, indent=1),
+                                 encoding="utf-8")
+        except Exception as exc:
+            logger.warning(f"Карта улиц не записана: {exc}")
+
+
 class StreetScanState:
     """
     Состояние обхода улиц: какие улицы уже проверялись и какие кадастры на них
