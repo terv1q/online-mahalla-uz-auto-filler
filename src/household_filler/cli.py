@@ -29,22 +29,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--retry-ignored", action="store_true",
                         help="обрабатывать и те кадастры, что уже в ignore-листе")
-    parser.add_argument("--streets-file", default=STREETS_FILE,
-                        help=f"HTML-таблица улиц, сохранённая со страницы сайта "
-                             f"(по умолчанию {STREETS_FILE}). Пусто — брать улицы из Excel")
+    parser.add_argument("--streets-file", default="",
+                        help=f"HTML-таблица улиц, сохранённая со страницы сайта — "
+                             f"источник списка улиц вместо живой страницы. "
+                             f"Пусто (по умолчанию) — читать страницу survey_homes; "
+                             f"например {STREETS_FILE}")
     parser.add_argument("--streets-from", type=int, default=None,
                         help=f"с какой улицы начинать обход (по умолчанию "
-                             f"{STREETS_FILE_FROM} для файла улиц, {STREETS_FROM} для Excel)")
+                             f"{STREETS_FILE_FROM} для файла улиц, {STREETS_FROM} для страницы)")
     parser.add_argument("--street-scan", dest="street_scan", action="store_true",
                         default=True,
-                        help="сначала обойти все улицы и собрать уже заведённые кадастры "
-                             "(по умолчанию включено)")
+                        help="сначала обойти улицы из таблицы и собрать уже заведённые "
+                             "кадастры (по умолчанию включено)")
     parser.add_argument("--no-street-scan", dest="street_scan", action="store_false",
                         help="не обходить улицы, сразу основной алгоритм")
     parser.add_argument("--rescan-streets", action="store_true",
                         help="обходить улицы заново, даже если они уже проверены")
-    parser.add_argument("--streets-file-only", action="store_true",
-                        help="обходить только улицы из файла, без добавления улиц из Excel")
     parser.add_argument("--trace-js", action="store_true",
                         help="писать в actions-лог каждый вызов JS (по умолчанию включено)")
     parser.add_argument("--no-trace-js", dest="trace_js", action="store_false",
