@@ -14,7 +14,6 @@ from ..core.pacing import Pacer
 from ..core.selectors import (
     SHEET_ERRORS,
     SHEET_OK,
-    UNKNOWN_STREET_MARKERS,
 )
 from ..core.settings import BASE_URL
 from ..core.state import (
@@ -38,7 +37,6 @@ from ..core.utils import (
     norm_doc_code,
     norm_text,
     parse_streets_file,
-    url_params,
 )
 from .config import (
     ACTIONS_LOG_FILE,
@@ -188,25 +186,7 @@ class FamilyAutomation:
 
     def read_streets_from_page(self) -> List[dict]:
         """Улицы со страницы survey_homes (если файла улиц нет)."""
-        units: List[dict] = []
-        seen = set()
-        for item in self.table_rows_with_links("survey_homes_street"):
-            href = item.get("href") or ""
-            if "survey_homes_street" not in href:
-                continue
-            url = urljoin(BASE_URL, unescape(href))
-            street_id = url_params(url).get("street_id", "")
-            if street_id in ("", "0") or street_id in seen:
-                continue
-            name = " | ".join(x for x in (item.get("cells") or []) if x)[:100] \
-                or (item.get("text") or "")
-            if any(marker in name.lower() for marker in UNKNOWN_STREET_MARKERS):
-                logger.info(f"Улица пропущена («номаълум»): {name}")
-                continue
-            seen.add(street_id)
-            units.append({"url": url, "name": name or f"street_id={street_id}",
-                          "street_id": street_id})
-        return units
+        return self.automator.read_street_units()
 
     def street_units(self) -> List[dict]:
         units = parse_streets_file(self.args.streets_file) if self.args.streets_file else []
