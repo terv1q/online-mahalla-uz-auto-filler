@@ -215,6 +215,8 @@ class ReportWriter:
     def add(self, sheet: str, street: str, code: str, full_name: str, series: str,
             number: str, birth: str, status: str, error_type: str = "",
             notice: str = "", url: str = "") -> None:
+        if sheet not in self.wb.sheetnames:
+            self._create_sheet(sheet)
         ws = self.wb[sheet]
         ws.append([ws.max_row, datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
                    street, code, full_name, series, number, birth, status,
