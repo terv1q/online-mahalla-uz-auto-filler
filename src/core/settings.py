@@ -4,6 +4,10 @@ from .paths import BROWSER_DIR
 BASE_URL = "https://www.online-mahalla.uz"
 
 
+SURVEY_URL = (f"{BASE_URL}/tables/survey_homes?_level=4&obl_id=30&area_id=3005"
+              f"&district_id=3005049&_mid=3548")
+
+
 TRACE_JS = True
 
 
