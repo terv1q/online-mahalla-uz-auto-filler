@@ -1,3 +1,4 @@
+import difflib
 import random
 import re
 
@@ -10,7 +11,10 @@ from .selectors import (
     UNKNOWN_STREET_MARKERS,
     UZ_PHONE_PREFIXES,
 )
-from .settings import BASE_URL
+from .settings import (
+    BASE_URL,
+    STREET_MATCH_THRESHOLD,
+)
 from html import unescape
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -118,6 +122,50 @@ def norm_street(text: str) -> str:
     value = re.sub(r"^\s*(ул\.?|улица|кўча|куча|ko'cha|kocha|street)\s*", "", value)
     value = re.sub(r"[^\w/() ]+", " ", value, flags=re.UNICODE)
     return " ".join(value.split())
+
+
+def street_key(text: str) -> str:
+    """
+    Ключ улицы для сопоставления таблицы со списком сайта. В отличие от
+    norm_street сохраняет «ҳ», «қ», «ғ», «ў» — на сайте есть разные улицы
+    «Бахор» и «Баҳор», и их нельзя сводить к одному ключу.
+    """
+    value = str(text or "").lower()
+    value = re.sub(r"^\s*(ул\.?|улица|кўча|куча|ko'cha|kocha|street)\s*", "", value)
+    value = re.sub(r"[^\w/() ]+", " ", value, flags=re.UNICODE)
+    return " ".join(value.split())
+
+
+def match_street_unit(target: str, units: List[dict]) -> Tuple[Optional[dict], float]:
+    """Самая похожая улица сайта: сначала точный ключ, иначе difflib по ключам."""
+    want = street_key(target)
+    if not want:
+        return None, 0.0
+    best: Optional[dict] = None
+    best_ratio = 0.0
+    for unit in units:
+        have = street_key(unit.get("name") or "")
+        if not have:
+            continue
+        if have == want:
+            return unit, 1.0
+        ratio = difflib.SequenceMatcher(None, want, have).ratio()
+        if want in have or have in want:
+            ratio = max(ratio, 0.85 - abs(len(have) - len(want)) * 0.01)
+        if ratio > best_ratio:
+            best, best_ratio = unit, ratio
+    if best is not None and best_ratio >= STREET_MATCH_THRESHOLD:
+        return best, best_ratio
+    return None, best_ratio
+
+
+def is_url(value: str) -> bool:
+    return str(value or "").strip().lower().startswith(("http://", "https://"))
+
+
+def street_url(street_id: str) -> str:
+    return (f"{BASE_URL}/tables/survey_homes_street?obl_id=30&area_id=3005"
+            f"&district_id=3005049&street_id={street_id}")
 
 
 def norm_text(text: str) -> str:
