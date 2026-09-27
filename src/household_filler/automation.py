@@ -20,11 +20,15 @@ from ..core.selectors import (
     SHEET_SKIPPED,
     STREETS_FROM,
 )
-from ..core.settings import BASE_URL
+from ..core.settings import (
+    BASE_URL,
+    SURVEY_URL,
+)
 from ..core.state import (
     CadasterRegistry,
     IgnoreList,
     Progress,
+    StreetMap,
     StreetScanState,
 )
 from ..core.timing import (
@@ -32,7 +36,10 @@ from ..core.timing import (
     RETRY_PAUSE,
 )
 from ..core.utils import (
+    match_street_unit,
     parse_streets_file,
+    street_key,
+    street_url,
     url_params,
 )
 from .config import (
@@ -41,6 +48,8 @@ from .config import (
     IGNORE_FILE,
     PROFILE,
     PROGRESS_FILE,
+    STREET_ALIASES,
+    STREET_MAP_FILE,
     STREETS_FILE_FROM,
     STREETS_FOUND_FILE,
     STREETS_STATE_FILE,
@@ -68,12 +77,16 @@ class NewkadastrAutomation:
         self.progress = Progress(PROGRESS_FILE, args.resume)
         self.ignore = IgnoreList(IGNORE_FILE)
         self.streets = StreetScanState(STREETS_STATE_FILE, STREETS_FOUND_FILE)
+        self.street_map = StreetMap(STREET_MAP_FILE)
         self.cadasters = CadasterRegistry(CADASTERS_FILE)
         self.excel_index: Dict[str, ExcelRow] = {}
         self.excel_rows: List[ExcelRow] = []
+        self.run_rows: List[ExcelRow] = []
+        self.resolved: Dict[str, dict] = {}
         self.street_source = ""
         self.stats = {"OK": 0, "OK_WARN": 0, "FAILED": 0, "SKIPPED": 0,
-                      "IGNORED": 0, "ALREADY_DONE": 0,
+                      "IGNORED": 0, "ALREADY_DONE": 0, "NO_STREET": 0,
+                      "STREET_OPEN_FAIL": 0,
                       ERR_EXISTS: 0, ERR_ACTIVE: 0, ERR_DEAD: 0,
                       "STREETS_SCANNED": 0, "STREETS_FOUND": 0}
         self.started = time.perf_counter()
@@ -114,56 +127,127 @@ class NewkadastrAutomation:
         logger.info(f"Состояние улиц: в ignore/progress добавлено строк {added} "
                     f"(всего в ignore {len(self.ignore.reasons)})")
 
+    def stream_rows(self) -> List[ExcelRow]:
+        """Строки, которые пойдут в работу: ограниченные --start-row, иначе все."""
+        if self.run_rows:
+            return self.run_rows
+        if not self.excel_rows:
+            self.excel_rows = ExcelReader(self.args.excel).read_rows(2)
+        return self.excel_rows
+
+    def read_street_list(self) -> List[dict]:
+        """Улицы района: сохранённая страница (--streets-file) или живая сводка."""
+        if self.args.streets_file:
+            units = parse_streets_file(self.args.streets_file)
+            if units:
+                self.street_source = f"файл {self.args.streets_file}"
+                return units
+            logger.warning(f"В файле улиц ничего не разобрано: {self.args.streets_file}")
+        self.street_source = "страница survey_homes"
+        logger.info(f"Читаю список улиц со страницы: {SURVEY_URL}")
+        if not self.automator.alive():
+            self.automator.restart()
+        self.automator.open_url(SURVEY_URL)
+        return self.automator.read_street_units()
+
+    def resolve_streets(self) -> Dict[str, dict]:
+        """
+        Название улицы в таблице → улица на сайте. Сначала готовая карта из
+        конфига, потом сохранённое сопоставление, и только для незнакомых улиц
+        открывается страница со списком улиц и берётся ближайшее название.
+        """
+        rows = self.stream_rows()
+        keys: List[str] = []
+        for row in rows:
+            if row.street_url:
+                continue
+            key = street_key(row.table_street)
+            if key and key not in keys:
+                keys.append(key)
+
+        self.resolved = {}
+        unknown: List[str] = []
+        for key in keys:
+            unit = self.street_map.get(key)
+            if unit:
+                self.resolved[key] = unit
+                continue
+            alias = STREET_ALIASES.get(key)
+            if alias:
+                unit = {"url": street_url(alias[0]), "name": alias[1],
+                        "street_id": alias[0]}
+                self.resolved[key] = unit
+                self.street_map.put(key, unit)
+                continue
+            unknown.append(key)
+
+        if unknown:
+            units = self.read_street_list()
+            logger.info(f"Знакомых улиц {len(keys) - len(unknown)} из {len(keys)}, "
+                        f"ищу на странице: {len(unknown)}")
+            for key in unknown:
+                unit, ratio = match_street_unit(key, units)
+                if unit is None:
+                    logger.warning(f"Улица «{key}» не нашлась в списке улиц "
+                                   f"(лучшее совпадение {ratio:.2f})")
+                    continue
+                self.resolved[key] = unit
+                self.street_map.put(key, unit)
+                logger.info(f"Улица «{key}» → {unit['name']} "
+                            f"(id {unit['street_id']}, совпадение {ratio:.2f})")
+
+        unmatched: List[str] = []
+        for row in rows:
+            if row.street_url:
+                continue
+            unit = self.resolved.get(street_key(row.table_street))
+            if unit is None:
+                name = row.table_street or "—"
+                if name not in unmatched:
+                    unmatched.append(name)
+                continue
+            row.street_url = unit["url"]
+
+        counts: Dict[str, int] = {}
+        for row in rows:
+            if row.street_url:
+                counts[row.street_url] = counts.get(row.street_url, 0) + 1
+        logger.info(f"Улиц сопоставлено: {len(self.resolved)} — {self.street_source or 'карта'}")
+        for key, unit in self.resolved.items():
+            logger.info(f"   «{key}» → {unit['name']} (id {unit['street_id']}) — строк "
+                        f"{counts.get(unit['url'], 0)}")
+        if unmatched:
+            logger.warning(f"Улицы без пары: {len(unmatched)} — " + "; ".join(unmatched[:20])
+                           + (" …" if len(unmatched) > 20 else "")
+                           + "; дополните STREET_ALIASES в src/household_filler/config.py"
+                             " и запустите снова")
+            logger.warning(f"Строк с несопоставленной улицей: "
+                           f"{sum(1 for r in rows if not r.street_url)}")
+        return self.resolved
+
     def street_units(self) -> List[dict]:
         """
-        Список улиц для обхода: из файла улиц (по умолчанию улицы.txt — таблица,
-        сохранённая со страницы сайта), иначе — из Excel. «номаълум» и street_id=0
-        отбрасываются. К каждой улице подтягиваются строки Excel этой же улицы.
+        Улицы для обхода — только те, что есть в таблице, в порядке таблицы.
+        К каждой подтягиваются строки Excel этой улицы: строки одной улицы идут
+        подряд, поэтому страница улицы открывается один раз.
         """
-        rows = self.excel_rows or ExcelReader(self.args.excel).read_rows(2)
-        if not self.excel_rows:
-            self.excel_rows = rows
-        by_url: Dict[str, List[ExcelRow]] = {}
-        by_id: Dict[str, List[ExcelRow]] = {}
-
-
-        self.excel_index: Dict[str, ExcelRow] = {}
-        for row in rows:
-            self.excel_index[row.code] = row
-            self.excel_index.setdefault(row.code.split("/")[0], row)
+        units: List[dict] = []
+        by_url: Dict[str, dict] = {}
+        for row in self.stream_rows():
             if not row.street_url:
                 continue
-            by_url.setdefault(row.street_url, []).append(row)
-            sid = url_params(row.street_url).get("street_id", "")
-            if sid:
-                by_id.setdefault(sid, []).append(row)
-
-        file_streets = parse_streets_file(self.args.streets_file) if self.args.streets_file else []
-        units: List[dict] = []
-        if file_streets:
-            self.street_source = f"файл {self.args.streets_file}"
-            for street in file_streets:
-                units.append({"url": street["url"], "name": street["name"],
-                              "street_id": street["street_id"],
-                              "rows": by_id.get(street["street_id"], [])})
-            if not self.args.streets_file_only:
-                known = {u["street_id"] for u in units}
-                extra = [u for u in by_url.items()
-                         if url_params(u[0]).get("street_id", "") not in known]
-                for url, street_rows in extra:
-                    units.append({"url": url, "name": street_rows[0].street_label(),
-                                  "street_id": url_params(url).get("street_id", ""),
-                                  "rows": street_rows})
-                if extra:
-                    self.street_source += f" + Excel ({len(extra)} улиц)"
-        else:
-            self.street_source = "Excel"
-            for url, street_rows in by_url.items():
-                units.append({"url": url, "name": street_rows[0].street_label(),
-                              "street_id": url_params(url).get("street_id", ""),
-                              "rows": street_rows})
-        logger.info(f"Источник списка улиц: {self.street_source} — улиц {len(units)}, "
-                    f"есть в Excel {sum(1 for u in units if u['rows'])}")
+            unit = by_url.get(row.street_url)
+            if unit is None:
+                site = self.resolved.get(street_key(row.table_street)) or {}
+                unit = {"url": row.street_url,
+                        "name": site.get("name") or row.street_label(),
+                        "street_id": url_params(row.street_url).get("street_id", ""),
+                        "rows": []}
+                by_url[row.street_url] = unit
+                units.append(unit)
+            unit["rows"].append(row)
+        logger.info(f"Улиц в работе: {len(units)}, строк: "
+                    f"{sum(len(u['rows']) for u in units)}")
         return units
 
     def scan_streets(self) -> None:
@@ -215,7 +299,11 @@ class NewkadastrAutomation:
             with timed(f"2.{idx} Скан улицы", label):
                 if not self.automator.alive():
                     self.automator.restart()
-                self.automator.open_street(url)
+                if not self.automator.open_street_by_link(unit["street_id"], url):
+                    self.stats["STREET_OPEN_FAIL"] += 1
+                    logger.warning(f"Улица «{label}» не открыта — сканирование пропущено")
+                    actions.info(f"УЛИЦА НЕ ОТКРЫТА {label} | {url}")
+                    continue
                 found = self.automator.read_street_cadasters()
             elapsed = time.perf_counter() - started
 
@@ -300,8 +388,8 @@ class NewkadastrAutomation:
                     f"идём по улицам по порядку таблицы")
         multi = [key for key in order if len(buckets[key]) > 1]
         for key in multi[:20]:
-            logger.info(f"   улица: {buckets[key][0].street_label()} — "
-                        f"строк {len(buckets[key])}")
+            label = buckets[key][0].street_label() if key else "БЕЗ УЛИЦЫ (пропуск)"
+            logger.info(f"   улица: {label} — строк {len(buckets[key])}")
         if len(multi) > 20:
             logger.info(f"   … улиц с несколькими строками всего: {len(multi)}")
         return ordered
@@ -311,7 +399,8 @@ class NewkadastrAutomation:
         if not rows:
             logger.error("В Excel нет данных")
             return
-        rows = self.group_rows_by_street(rows)
+        self.run_rows = rows
+        self.build_excel_index()
 
         self.automator.start()
         processed = 0
@@ -321,6 +410,8 @@ class NewkadastrAutomation:
             self.automator._close_extra_windows()
             self.automator.wait_for_login()
 
+            self.resolve_streets()
+            rows = self.group_rows_by_street(rows)
             self.scan_streets()
 
             total = len(rows)
@@ -329,6 +420,13 @@ class NewkadastrAutomation:
                     logger.info("Достигнут лимит строк")
                     return
                 if self.args.cadaster and self.args.cadaster not in row.code:
+                    continue
+                if not row.street_url:
+                    self.stats["NO_STREET"] += 1
+                    logger.warning(f"↷ [{idx}/{total}] {row.code} — улица "
+                                   f"«{row.table_street or '—'}» не сопоставлена, пропуск")
+                    actions.info(f"ПРОПУСК {row.code}: улица «{row.table_street}» "
+                                 f"нет в STREET_ALIASES и в списке улиц")
                     continue
                 if self.progress.is_done(row.code) and not self.args.retry_ignored:
                     self.stats["ALREADY_DONE"] = self.stats.get("ALREADY_DONE", 0) + 1
@@ -402,9 +500,10 @@ class NewkadastrAutomation:
 
         elif status == "KNOWN_ERROR":
             self.stats[info] = self.stats.get(info, 0) + 1
-            title = ERROR_TITLES[info]
-            self.report.add(ERROR_SHEETS[info], street, code, house, pinfl, birth,
-                            phone, "ОШИБКА САЙТА", title, notices, row.street_url)
+            title = ERROR_TITLES.get(info, info)
+            self.report.add(ERROR_SHEETS.get(info, SHEET_ERRORS), street, code, house,
+                            pinfl, birth, phone, "ОШИБКА САЙТА", title, notices,
+                            row.street_url)
             self.report.add_not_entered(code, street, house, pinfl, birth, phone, title)
             self.ignore.add(code, title)
             self.progress.mark(code, info)
@@ -461,8 +560,12 @@ class NewkadastrAutomation:
         logger.info(f"Пропущено: {s['SKIPPED']} | в ignore: {s['IGNORED']} | "
                     f"уже обработано ранее: {s['ALREADY_DONE']} "
                     f"(всего в ignore-листе: {len(self.ignore.reasons)})")
+        logger.info(f"Строк без сопоставленной улицы: {s['NO_STREET']} "
+                    f"(карта улиц: {STREET_MAP_FILE})")
         logger.info(f"Улиц проверено: {s['STREETS_SCANNED']} | кадастров найдено на улицах: "
                     f"{s['STREETS_FOUND']} (состояние: {STREETS_STATE_FILE})")
+        if s["STREET_OPEN_FAIL"]:
+            logger.warning(f"Улиц не удалось открыть кликом по ссылке: {s['STREET_OPEN_FAIL']}")
         logger.info(f"Реестр всех заведённых кадастров: {len(self.cadasters.known)} "
                     f"({CADASTERS_FILE})")
         logger.info(f"Отчёт: {self.report.path}")
