@@ -7,11 +7,7 @@ from ..core.paths import (
     STREETS_DIR,
     VAR_DIR,
 )
-from ..core.settings import BASE_URL
-
-
-SURVEY_URL = (f"{BASE_URL}/tables/survey_homes?_level=4&obl_id=30&area_id=3005"
-              f"&district_id=3005049&_mid=3548")
+from ..core.settings import SURVEY_URL
 
 
 EXCEL_FILE = str(INPUT_DIR / "family_members.xlsx")
