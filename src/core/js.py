@@ -233,6 +233,36 @@ return out;
 """
 
 
+JS_CLICK_STREET_LINK = """
+const id = String(arguments[0] || '');
+for (const a of document.querySelectorAll('a[href*="survey_homes_street"]')) {
+    const href = a.getAttribute('href') || '';
+    const m = href.match(/street_id=(\\d+)/);
+    if (!m || m[1] !== id) continue;
+    a.scrollIntoView({block: 'center'});
+    a.click();
+    return (a.innerText || '').replace(/\\s+/g, ' ').trim();
+}
+return '';
+"""
+
+
+JS_TABLE_LINKS_FILTERED = """
+const needle = arguments[0] || '';
+const out = [];
+document.querySelectorAll('table tr').forEach(tr => {
+    const a = tr.querySelector('a[href*="' + needle + '"]');
+    if (!a) return;
+    const cells = Array.from(tr.querySelectorAll('td'))
+        .map(td => (td.innerText || '').replace(/\\s+/g, ' ').trim());
+    out.push({href: a.getAttribute('href') || '',
+              text: (a.innerText || a.textContent || '').replace(/\\s+/g, ' ').trim(),
+              cells: cells});
+});
+return out;
+"""
+
+
 JS_SCROLL_STEP = """
 const c = document.querySelector('div.table-h-scroll')
        || document.querySelector('div.table-responsive');
