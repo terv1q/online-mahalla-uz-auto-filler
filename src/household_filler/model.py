@@ -18,6 +18,7 @@ from ..core.utils import (
     birth_from_pinfl,
     digits_only,
     generate_uzbek_phone,
+    is_url,
     normalize_code,
     normalize_date,
     url_params,
@@ -50,6 +51,7 @@ class ExcelRow:
     birth2: str = ""
     phone: str = ""
     street_name: str = ""
+    table_street: str = ""
 
     @property
     def code(self) -> str:
@@ -88,6 +90,9 @@ class ExcelRow:
         return (self.phone or "").strip()
 
     def street_label(self) -> str:
+        """Улица для отчёта: сначала из таблицы, потом из формы, потом номер."""
+        if self.table_street:
+            return self.table_street
         if self.street_name:
             return self.street_name
         params = url_params(self.street_url)
@@ -111,12 +116,15 @@ class ExcelReader:
         skipped = first - 2
         for idx in range(first, worksheet.max_row + 1):
             try:
+                street = self._cell(worksheet, idx, 4)
                 row = ExcelRow(
                     row_index=idx,
                     number=self._cell(worksheet, idx, 1),
                     cadaster=self._cell(worksheet, idx, 2),
                     pinfl_raw=self._cell(worksheet, idx, 3),
-                    street_url=self._cell(worksheet, idx, 4),
+                    street_url=street if is_url(street) else "",
+                    street_name="" if is_url(street) else street,
+                    table_street="" if is_url(street) else street,
                     house=self._cell(worksheet, idx, 5),
                     birth1=self._cell(worksheet, idx, 6),
                     pinfl2_raw=self._cell(worksheet, idx, 7),
@@ -194,6 +202,8 @@ class ReportWriter:
     def add(self, sheet: str, street: str, code: str, house: str, pinfl: str,
             birth: str, phone: str, status: str, error_type: str = "",
             notice: str = "", url: str = "") -> None:
+        if sheet not in self.wb.sheetnames:
+            self._create_sheet(sheet)
         ws = self.wb[sheet]
         ws.append([ws.max_row, datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
                    street, code, house, pinfl, birth, phone, status, error_type,
