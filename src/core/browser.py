@@ -13,6 +13,7 @@ from .js import (
     JS_CLICK,
     JS_CLOSE_SELECT,
     JS_CLOSE_TOASTS,
+    JS_CLICK_STREET_LINK,
     JS_FIELDSET_HTML,
     JS_FIELD_SNAPSHOT,
     JS_FOCUS,
@@ -31,6 +32,7 @@ from .js import (
     JS_SET_INPUT,
     JS_SET_SELECT_VALUE,
     JS_SPINNER_VISIBLE,
+    JS_TABLE_LINKS_FILTERED,
     JS_TABLE_ROWS,
 )
 from .logs import (
@@ -79,6 +81,7 @@ from .selectors import (
     STUDY_LEVEL_NAMES,
     STUDY_LEVEL_VALUE,
     SUCCESS_MARKERS,
+    UNKNOWN_STREET_MARKERS,
 )
 from .settings import (
     BASE_URL,
@@ -87,6 +90,7 @@ from .settings import (
     PROFILE_NAME,
     SAVE_SCREENSHOTS,
     STREET_MATCH_THRESHOLD,
+    SURVEY_URL,
     USER_DATA_DIR,
 )
 from .timing import (
@@ -139,6 +143,7 @@ from .utils import (
     url_params,
 )
 from datetime import datetime, timedelta
+from html import unescape
 from pathlib import Path
 from selenium import webdriver
 from selenium.common.exceptions import (
@@ -476,6 +481,46 @@ class BrowserAutomator:
         match = CADASTER_IN_TEXT.search(text or "")
         return normalize_code(match.group(0)) if match else ""
 
+    def read_street_units(self) -> List[dict]:
+        """
+        Улицы сводной таблицы survey_homes: [{'url','name','street_id'}].
+        «номаълум» и street_id=0 отбрасываются. Основной путь — прокрутка и
+        сбор через a.link; если таких ссылок нет, разбор строк по любой ссылке
+        (на других страницах класс ссылки иной).
+        """
+        rows = self._collect_table_rows()
+        items = [r for r in rows if "survey_homes_street" in (r.get("href") or "")]
+        if not items:
+            logger.warning("Ссылок на улицы через a.link не нашлось — запасной разбор")
+            try:
+                items = self.js(JS_TABLE_LINKS_FILTERED, "survey_homes_street") or []
+            except Exception as exc:
+                logger.warning(f"Запасной разбор не удался: {str(exc).splitlines()[0][:100]}")
+                items = []
+        units: List[dict] = []
+        seen = set()
+        for item in items:
+            href = item.get("href") or ""
+            if "survey_homes_street" not in href:
+                continue
+            url = urljoin(BASE_URL, unescape(href))
+            street_id = url_params(url).get("street_id", "")
+            if street_id in ("", "0"):
+                logger.info(f"Улица пропущена (номер 0): {url[:100]}")
+                continue
+            if street_id in seen:
+                continue
+            cells = [c for c in (item.get("cells") or []) if c]
+            name = " | ".join(cells)[:200] or (item.get("text") or "").strip()
+            if any(marker in name.lower() for marker in UNKNOWN_STREET_MARKERS):
+                logger.info(f"Улица пропущена («номаълум»): {name}")
+                continue
+            seen.add(street_id)
+            units.append({"url": url, "name": name or f"street_id={street_id}",
+                          "street_id": street_id})
+        logger.info(f"Улицы со страницы survey_homes: {len(units)}")
+        return units
+
     def read_street_cadasters(self) -> List[dict]:
         """
         Кадастры, уже заведённые на странице улицы:
@@ -698,6 +743,49 @@ class BrowserAutomator:
         if not found:
             logger.warning("Кнопка «Хонадон қўшиш» не появилась — продолжаю")
         self.current_street_url = url
+        self.sleep_if_rate_limited()
+        return True
+
+    def open_street_by_link(self, street_id: str, url: str = "") -> bool:
+        """
+        Улица открывается кликом по ссылке на странице survey_homes — как это
+        делает человек, без подстановки ссылки. Если это та же улица, страница
+        не переоткрывается: строки одной улицы идут подряд.
+        """
+        self.focus_main()
+        if url and url == self.current_street_url and self.alive():
+            if self.wait_add_home_button(timeout=1.0):
+                logger.info("Та же улица — страницу не перезагружаю")
+                actions.info(f"Улица без перезагрузки: {url[:120]}")
+                return True
+
+        clicked = ""
+        for attempt in (1, 2):
+            try:
+                clicked = self.js(JS_CLICK_STREET_LINK, street_id) or ""
+            except Exception as exc:
+                logger.warning(f"Клик по улице не удался: {str(exc).splitlines()[0][:100]}")
+                clicked = ""
+            if clicked:
+                break
+            if attempt == 2:
+                break
+            logger.info(f"Ссылки street_id={street_id} на странице нет — открываю список улиц")
+            self.open_url(SURVEY_URL)
+
+        if not clicked:
+            logger.warning(f"Улица street_id={street_id} не найдена в списке улиц")
+            self._screenshot("street_link_fail")
+            return False
+
+        logger.info(f"Улица открыта кликом: {clicked} (street_id={street_id})")
+        actions.info(f"КЛИК ПО УЛИЦЕ: {clicked} | street_id={street_id}")
+        if not self.wait_add_home_button(timeout=STREET_READY_TIMEOUT):
+            logger.warning("Кнопка «Хонадон қўшиш» не появилась — продолжаю")
+        try:
+            self.current_street_url = url or self.driver.current_url
+        except Exception:
+            self.current_street_url = url
         self.sleep_if_rate_limited()
         return True
 
@@ -1783,7 +1871,11 @@ class BrowserAutomator:
         if not row.street_url:
             return "SKIPPED", "Нет ссылки на улицу", "", "", ""
         with timed("3.1 Открытие страницы улицы", row.street_label()):
-            self.open_street(row.street_url)
+            street_id = url_params(row.street_url).get("street_id", "")
+            if street_id:
+                self.open_street_by_link(street_id, row.street_url)
+            else:
+                self.open_street(row.street_url)
 
 
         with timed("3.2 Кнопка «Хонадон қўшиш» и форма добавления"):
