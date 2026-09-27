@@ -108,20 +108,26 @@ Common options. Run `--help` for the full list.
 
 ## How it works
 
-1. The district street list comes from the `tables/survey_homes` page and from
-   `data/streets/streets_source.txt`. Streets with `street_id=0` and unnamed
-   streets are skipped.
-2. Each street is opened and the household links (`/forms/survey_homes/{id}`)
-   are read.
-3. Completed households are skipped without opening a form. Their state is kept
+1. The household table holds street names, not links. A name is matched against
+   the district street list by a ready mapping in `STREET_ALIASES`
+   (`src/household_filler/config.py`) and by the saved map in `var/state/`. The
+   `tables/survey_homes` page is opened only for names that are still unknown;
+   `data/streets/streets_source.txt` can be used instead of the live page.
+   Streets with `street_id=0` and unnamed streets are skipped.
+2. Rows of one street are processed consecutively. The street page is opened once
+   per street and is not reloaded while the street does not change.
+3. A street is opened by clicking its row link on the `tables/survey_homes` page,
+   the way a person does, not by entering the street URL. The household links
+   (`/forms/survey_homes/{id}`) are read from the opened street.
+4. Completed households are skipped without opening a form. Their state is kept
    in `var/state/`.
-4. Streets and forms are opened in reusable tabs; unused tabs are closed.
-5. Every step is written to `var/logs/*_actions.log` with timings: method entry
+5. Streets and forms are opened in reusable tabs; unused tabs are closed.
+6. Every step is written to `var/logs/*_actions.log` with timings: method entry
    and exit, algorithm stage, JavaScript result.
-6. Site responses are read from the page itself. BootstrapVue toasts
+7. Site responses are read from the page itself. BootstrapVue toasts
    ("Хабар", "Диққат", "Хатолик") are classified by type, and API HTTP errors are
    captured separately.
-7. Errors do not stop a run:
+8. Errors do not stop a run:
    * "Хатолик" or `Request failed with status code 400`: the row is marked as
      used and is not retried, and the dialog is closed before the next row;
    * "So'rovlar ko'payib ketdi. N soniya kuting": the runner pauses for N
@@ -130,7 +136,7 @@ Common options. Run `--help` for the full list.
      the counter is re-read;
    * a series of failures: the form is reloaded so the next row starts from a
      clean state.
-8. Request timeouts adapt to the site. A slower response raises them, a fast
+9. Request timeouts adapt to the site. A slower response raises them, a fast
    response lowers them immediately.
 
 ## Output
